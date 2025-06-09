@@ -1,0 +1,258 @@
+library(shiny)
+library(ggplot2)
+library(DT)
+
+ui <- fluidPage(
+  tags$head(
+    tags$link(
+      href = "https://fonts.googleapis.com/css2?family=Fredoka&display=swap",
+      rel = "stylesheet"
+    ),
+    tags$style(HTML("
+      body, h1, h2, h3, h4, h5, h6, label, button, .btn {
+        font-family: 'Fredoka', sans-serif;
+      }
+    "))
+  ),
+  
+  titlePanel("Coordinate Plane by Differentiate Secondary Math"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      width = 4,
+      div(style = "max-height: 90vh; overflow-y: auto;",
+          
+          h4("Zoom & Pan Controls"),
+          fluidRow(
+            column(4, actionButton("zoom_in", "Zoom In")),
+            column(4, actionButton("zoom_out", "Zoom Out"))
+          ),
+          fluidRow(
+            column(4, actionButton("pan_left", "← Left")),
+            column(4, actionButton("pan_right", "Right →"))
+          ),
+          fluidRow(
+            column(4, actionButton("pan_up", "↑ Up")),
+            column(4, actionButton("pan_down", "Down ↓"))
+          ),
+          hr(),
+          
+          h4("Manual Option: Insert Point or Line"),
+          numericInput("x_input", "X Coordinate", value = 0),
+          numericInput("y_input", "Y Coordinate", value = 0),
+          fluidRow(
+            column(6, actionButton("add_point_manual", "Add Point")),
+            column(6, actionButton("add_line_manual", "Add Line"))
+          ),
+          hr(),
+          
+          h4("Click Mode"),
+          checkboxInput("remove_mode", "ON/OFF Click Mode", value = FALSE),
+          tags$p("☐ Uncheck: Add/connect points."),
+          tags$p("✔ Check: Remove points or lines."),
+          br(),
+          actionButton("clear_all", "Clear All"),
+          br(), br(),
+          downloadButton("downloadPlot", "Download Plot"),
+          br(), br(),
+          
+          h4("Table of Plotted Points"),
+          DTOutput("points_table")
+      )
+    ),
+    
+    mainPanel(
+      plotOutput("coordPlot", height = "470px", click = "plot_click")
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  all_points <- reactiveVal(data.frame(x = numeric(), y = numeric()))
+  all_lines <- reactiveVal(data.frame(x1 = numeric(), y1 = numeric(), x2 = numeric(), y2 = numeric()))
+  zoom_range <- reactiveVal(c(-10, 10))
+  pan_step <- 2
+  point_threshold <- 0.3
+  line_threshold <- 0.3
+  
+  distance_to_segment <- function(px, py, x1, y1, x2, y2) {
+    A <- px - x1
+    B <- py - y1
+    C <- x2 - x1
+    D <- y2 - y1
+    dot <- A * C + B * D
+    len_sq <- C * C + D * D
+    param <- if (len_sq != 0) dot / len_sq else -1
+    if (param < 0) {
+      xx <- x1; yy <- y1
+    } else if (param > 1) {
+      xx <- x2; yy <- y2
+    } else {
+      xx <- x1 + param * C
+      yy <- y1 + param * D
+    }
+    sqrt((px - xx)^2 + (py - yy)^2)
+  }
+  
+  observeEvent(input$plot_click, {
+    click_x <- round(input$plot_click$x)
+    click_y <- round(input$plot_click$y)
+    if (is.null(click_x) || is.null(click_y)) return()
+    
+    pts <- all_points()
+    
+    if (input$remove_mode) {
+      dists <- sqrt((pts$x - click_x)^2 + (pts$y - click_y)^2)
+      if (any(dists <= point_threshold)) {
+        all_points(pts[-which.min(dists), ])
+        return()
+      }
+      
+      lines <- all_lines()
+      if (nrow(lines) > 0) {
+        dists_to_lines <- mapply(
+          distance_to_segment,
+          px = click_x,
+          py = click_y,
+          x1 = lines$x1,
+          y1 = lines$y1,
+          x2 = lines$x2,
+          y2 = lines$y2
+        )
+        if (any(dists_to_lines <= line_threshold)) {
+          all_lines(lines[-which.min(dists_to_lines), ])
+        }
+      }
+      return()
+    }
+    
+    new_point <- data.frame(x = click_x, y = click_y)
+    all_points(rbind(pts, new_point))
+  })
+  
+  observeEvent(input$add_point_manual, {
+    pt <- data.frame(x = input$x_input, y = input$y_input)
+    all_points(rbind(all_points(), pt))
+  })
+  
+  observeEvent(input$add_line_manual, {
+    pts <- all_points()
+    if (nrow(pts) >= 2) {
+      pt1 <- pts[nrow(pts) - 1, ]
+      pt2 <- pts[nrow(pts), ]
+      new_line <- data.frame(x1 = pt1$x, y1 = pt1$y, x2 = pt2$x, y2 = pt2$y)
+      all_lines(rbind(all_lines(), new_line))
+    }
+  })
+  
+  observeEvent(input$clear_all, {
+    all_points(data.frame(x = numeric(), y = numeric()))
+    all_lines(data.frame(x1 = numeric(), y1 = numeric(), x2 = numeric(), y2 = numeric()))
+  })
+  
+  observeEvent(input$zoom_in, {
+    current <- zoom_range()
+    range <- diff(current)
+    center <- mean(current)
+    new_range <- range * 0.7 / 2
+    zoom_range(c(center - new_range, center + new_range))
+  })
+  
+  observeEvent(input$zoom_out, {
+    current <- zoom_range()
+    range <- diff(current)
+    center <- mean(current)
+    new_range <- range * 1.3 / 2
+    zoom_range(c(center - new_range, center + new_range))
+  })
+  
+  observeEvent(input$pan_left, {
+    zoom <- zoom_range()
+    zoom_range(zoom + c(-pan_step, -pan_step))
+  })
+  observeEvent(input$pan_right, {
+    zoom <- zoom_range()
+    zoom_range(zoom + c(pan_step, pan_step))
+  })
+  observeEvent(input$pan_up, {
+    zoom <- zoom_range()
+    zoom_range(zoom + c(pan_step, pan_step))
+  })
+  observeEvent(input$pan_down, {
+    zoom <- zoom_range()
+    zoom_range(zoom + c(-pan_step, -pan_step))
+  })
+  
+  output$coordPlot <- renderPlot({
+    points <- all_points()
+    lines <- all_lines()
+    zoom <- zoom_range()
+    
+    p <- ggplot() +
+      coord_fixed(xlim = zoom, ylim = zoom) +
+      theme_minimal() +
+      theme(
+        axis.text = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 16, face = "bold")
+      ) +
+      geom_hline(yintercept = 0, color = "gray50") +
+      geom_vline(xintercept = 0, color = "gray50") +
+      scale_x_continuous(breaks = seq(floor(zoom[1]), ceiling(zoom[2]), by = 1)) +
+      scale_y_continuous(breaks = seq(floor(zoom[1]), ceiling(zoom[2]), by = 1))
+    
+    if (nrow(points) > 0) {
+      p <- p +
+        geom_point(data = points, aes(x = x, y = y), color = "black", size = 3) +
+        geom_text(data = points, aes(x = x, y = y, label = paste0("(", x, ", ", y, ")")),
+                  vjust = -1, hjust = 0.5, size = 4)
+    }
+    
+    if (nrow(lines) > 0) {
+      p <- p +
+        geom_segment(data = lines, aes(x = x1, y = y1, xend = x2, yend = y2),
+                     color = "black", size = 1.2)
+    }
+    
+    p
+  })
+  
+  output$points_table <- renderDT({
+    datatable(all_points(),
+              options = list(pageLength = 10, searching = FALSE),
+              rownames = FALSE,
+              colnames = c("X-Coordinate", "Y-Coordinate"))
+  })
+  
+  output$downloadPlot <- downloadHandler(
+    filename = function() { "coordinate_picture.png" },
+    content = function(file) {
+      png(file, width = 10, height = 10, units = "in", res = 500)
+      zoom <- zoom_range()
+      p <- ggplot() +
+        coord_fixed(xlim = zoom, ylim = zoom) +
+        theme_minimal() +
+        theme(
+          axis.text = element_text(size = 14, face = "bold"),
+          axis.title = element_text(size = 16, face = "bold")
+        ) +
+        geom_hline(yintercept = 0, color = "black") +
+        geom_vline(xintercept = 0, color = "black") +
+        scale_x_continuous(breaks = seq(floor(zoom[1]), ceiling(zoom[2]), by = 1)) +
+        scale_y_continuous(breaks = seq(floor(zoom[1]), ceiling(zoom[2]), by = 1))
+      
+      if (nrow(all_points()) > 0) {
+        p <- p + geom_point(data = all_points(), aes(x = x, y = y), color = "black", size = 3)
+      }
+      
+      if (nrow(all_lines()) > 0) {
+        p <- p + geom_segment(data = all_lines(), aes(x = x1, y = y1, xend = x2, yend = y2),
+                              color = "black", size = 1.2)
+      }
+      
+      print(p)
+      dev.off()
+    }
+  )
+}
+
+shinyApp(ui = ui, server = server)
